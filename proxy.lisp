@@ -17,16 +17,14 @@
      (with-output-to-string (out)
        (flet ((out (&rest stuff)
                 (dolist (x stuff) (princ x out)) (crlf out)))
-         (let ((1st-line (read-line header-stream)))
-           (write-sequence 1st-line out
-                           :start 0 :end (position #\Space 1st-line :from-end t))
-           (out " HTTP/1.0")) ;; 1.0 to ensure no chunking
          (loop with h while (setf h (read-line header-stream)) do
               (progn
                 (acond ((string= h "")
                         (loop-finish))
                        ((maybe-header-value h "Host: ")
-                        (setf host it) (out h))
+                        (setf host (subseq it 0 (or (position #\: it)
+                                                    (length it))))
+                        (out h))
                        ((maybe-header-value h "Content-Length: ")
                         (setf content-length it) (out h))
                        ((maybe-header-value h "Connection: ")
@@ -54,7 +52,7 @@
         (princ forward-headers s)
         (crlf s)
         (finish-output s))
-      (let ((buffer (make-array 4096 :element-type '(unsigned-byte 8))))
+      (let ((buffer (make-array 2048 :element-type '(unsigned-byte 8))))
         (loop for n = (read-sequence buffer server-stream) while (< 0 n)
            do (write-sequence buffer browser-stream :end n)
            finally (force-output browser-stream))))))
