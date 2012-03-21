@@ -1,44 +1,4 @@
-(in-package #:toot-vhost-proxy)
-
-(defvar default-vhost '("103.246.248.162" 80))
-(defvar *vhosts* (make-hash-table :test 'equal))
-
-(defmacro vhost (domain)
-  `(gethash ,domain *vhosts* default-vhost))
-
-;; for timeouts:
-;; (get-internal-real-time)
-;; (internal-time-units-per-second
-
-(defvar max-connections 50)
-(defvar connection-timeout-ms 2000)
-(defvar in-port 8080)
-
-(defvar +latin-1+
-  (make-external-format :latin1 :eol-style :lf)
-  "A FLEXI-STREAMS external format used for `faithful' input and
-output of binary data.")
-
-(defun proxy-test ()
-  (with-server-socket (listener (socket-listen *wildcard-host* in-port
-                                               :reuseaddress t
-                                               :backlog 20
-                                               :element-type '(unsigned-byte 8)))
-    (loop
-       (handler-case
-           (with-connected-socket (socket (socket-accept listener))
-             (proxy-connection socket))
-         (connection-aborted-error ())))))
-
-(defun read-headers (in)
-  (with-output-to-string (headers)
-    (let ((newline-state nil))
-      (loop for c = (write-char (read-char in) headers) do
-           (case c
-             ((#\Return #\Newline) (if newline-state
-                                       (loop-finish)
-                                       (setf newline-state t)))
-             (t (setf newline-state nil)))))))
+(in-package #:simple-vhost-proxy)
 
 (defun starts-with? (string prefix)
   (when (< (length prefix) (length string))
@@ -51,51 +11,72 @@ output of binary data.")
 (defun crlf (out)
   (write-char #\Return out) (write-char #\Newline out))
 
-(defun process-headers (headers client-ip proxy-ip)
-  (let (host content-length forwarded-for)
+(defun process-headers (header-stream client-ip proxy-ip)
+  (let (host content-length forwarded-for connection)
     (values
      (with-output-to-string (out)
        (flet ((out (&rest stuff)
                 (dolist (x stuff) (princ x out)) (crlf out)))
-         (with-input-from-string (in (string-right-trim '(#\Newline)
-                                      (remove #\Return headers)))
-           (let ((1st-line (read-line in)))
-             (write-sequence 1st-line out
-                             :start 0 :end (position #\Space 1st-line :from-end t))
-             (out " HTTP/1.0"))
-           (loop with h while (setf h (read-line in nil)) do
-                (progn
-                  (acond ((maybe-header-value h "Host: ")
-                          (setf host it) (out h))
-                         ((maybe-header-value h "Content-Length: ")
-                          (setf content-length it) (out h))
-                         ((maybe-header-value h "X-Forwarded-For: ")
-                          (setf forwarded-for t)
-                          (out h ", " proxy-ip))
-                         (t (out h))))
-                finally (unless forwarded-for
-                          (out "X-Forwarded-For: " client-ip ", " proxy-ip))))))
+         (let ((1st-line (read-line header-stream)))
+           (write-sequence 1st-line out
+                           :start 0 :end (position #\Space 1st-line :from-end t))
+           (out " HTTP/1.0")) ;; 1.0 to ensure no chunking
+         (loop with h while (setf h (read-line header-stream)) do
+              (progn
+                (acond ((string= h "")
+                        (loop-finish))
+                       ((maybe-header-value h "Host: ")
+                        (setf host it) (out h))
+                       ((maybe-header-value h "Content-Length: ")
+                        (setf content-length it) (out h))
+                       ((maybe-header-value h "Connection: ")
+                        (setf connection t) (out "Connection: close"))
+                       ((maybe-header-value h "X-Forwarded-For: ")
+                        (setf forwarded-for t)
+                        (out h ", " proxy-ip))
+                       (t (out h))))
+            finally (progn (unless forwarded-for
+                             (out "X-Forwarded-For: " client-ip ", " proxy-ip))
+                           (unless connection
+                             (out "Connection: close"))))))
      host
      (when content-length (parse-integer content-length)))))
 
-;;; timeout on the sockets
-;;; binary buffers
+(defun forward-response (hosts-table browser-stream forward-headers host
+                         content-length)
+  (declare (ignore content-length)) ;; for now
+  (let ((server (cdr (or (assoc host hosts-table :test #'string=)
+                         (car hosts-table)))))
+    (with-client-socket (server-socket server-stream (car server) (cadr server)
+                                       :element-type '(unsigned-byte 8))
+      (set-timeout server-socket 2)
+      (let ((s (make-flexi-stream server-stream :external-format :latin1)))
+        (princ forward-headers s)
+        (crlf s)
+        (finish-output s))
+      (let ((buffer (make-array 4096 :element-type '(unsigned-byte 8))))
+        (loop for n = (read-sequence buffer server-stream) while (< 0 n)
+           do (write-sequence buffer browser-stream :end n)
+           finally (force-output browser-stream))))))
 
-(defun forward-response (browser-stream forward-headers host content-length)
-  (let ((server (vhost host)))
-    (with-client-socket (out-socket s1 (car server) (cadr server)
-                                    :element-type '(unsigned-byte 8))
-      (let ((s (make-flexi-stream s1 :external-format +latin-1+)))
-        (princ forward-headers s) (crlf s)
-        (finish-output s)
-        (loop with l while (setf l (read-line s nil))
-             do (princ l browser-stream) (write-char #\Newline browser-stream) finally (force-output browser-stream))))))
+(defun proxy-connection (browser-socket hosts-table)
+  (set-timeout browser-socket 2)
+  (multiple-value-call #'forward-response
+    hosts-table
+    (socket-stream browser-socket)
+    (process-headers
+     (make-flexi-stream (socket-stream browser-socket)
+                        :external-format (make-external-format :latin1 :eol-style :crlf))
+     (usocket::host-to-hostname (get-peer-address browser-socket))
+     (usocket::host-to-hostname (get-local-address browser-socket)))))
 
-(defun proxy-connection (socket)
-  (let ((in (make-flexi-stream (socket-stream socket)
-                               :external-format +latin-1+)))
-    (multiple-value-call #'forward-response
-      in
-      (process-headers (read-headers in)
-                       (usocket::host-to-hostname (get-peer-address socket))
-                       (usocket::host-to-hostname (get-local-address socket))))))
+(defun start-proxy (port hosts-table)
+  (with-server-socket (listener (socket-listen *wildcard-host* port
+                                               :reuseaddress t
+                                               :backlog 20
+                                               :element-type '(unsigned-byte 8)))
+    (loop
+       (handler-case
+           (with-connected-socket (socket (socket-accept listener))
+             (proxy-connection socket hosts-table))
+         (connection-aborted-error ())))))
