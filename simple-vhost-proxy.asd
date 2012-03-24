@@ -7,4 +7,4 @@
     :components ((:file "package")
                  (:file "timeouts")
                  (:file "proxy"))
-    :depends-on (#:usocket #:flexi-streams #:anaphora))
+    :depends-on (#:usocket #:flexi-streams #:anaphora #:bordeaux-threads))

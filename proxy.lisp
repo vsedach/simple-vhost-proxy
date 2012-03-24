@@ -63,18 +63,34 @@
     hosts-table
     (socket-stream browser-socket)
     (process-headers
-     (make-flexi-stream (socket-stream browser-socket)
-                        :external-format (make-external-format :latin1 :eol-style :crlf))
+     (make-flexi-stream
+      (socket-stream browser-socket)
+      :external-format (make-external-format :latin1 :eol-style :crlf))
      (usocket::host-to-hostname (get-peer-address browser-socket))
      (usocket::host-to-hostname (get-local-address browser-socket)))))
 
 (defun start-proxy (port hosts-table)
-  (with-server-socket (listener (socket-listen *wildcard-host* port
-                                               :reuseaddress t
-                                               :backlog 20
-                                               :element-type '(unsigned-byte 8)))
-    (loop
-       (handler-case
-           (with-connected-socket (socket (socket-accept listener))
-             (proxy-connection socket hosts-table))
-         (connection-aborted-error ())))))
+  "Start a reverse HTTP proxy on the specified port. hosts-table
+should consist of a list of hosts to be forwarded to particular IPs
+and ports, like so: ((domain1 127.0.0.1 8080) (domain2 127.0.0.1 8081))
+
+Returns the main proxy server thread."
+  (bt:make-thread
+   (lambda ()
+     (with-server-socket (listener (socket-listen
+                                    *wildcard-host* port
+                                    :reuseaddress t
+                                    :backlog 20
+                                    :element-type '(unsigned-byte 8)))
+       (loop
+          (handler-case
+              (let ((socket (socket-accept listener)))
+                (bt:make-thread
+                 (lambda ()
+                   (handler-case (with-connected-socket (socket socket)
+                                   (proxy-connection socket hosts-table))
+                     (error ())))
+                 :name (format nil "simple-vhost-proxy (port ~A) connection thread"
+                               port)))
+            (error ()))))) ;; probably should do something less dumb
+   :name (format nil "simple-vhost-proxy main thread (port ~A)" port)))

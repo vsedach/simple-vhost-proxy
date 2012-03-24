@@ -2,10 +2,8 @@ Example use:
 (start-proxy 8080 '(("wiki.alu.org" "127.0.0.1" 8081)))
 
 Todo:
-* set timeouts
-* thread caps and socket backlog
+* better error handling
+* thread number limit and socket backlog
 * keepalive
-* chunking
 * XHR long-polling support
-
-
+* chunking
