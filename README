@@ -1,9 +1,25 @@
+simple-vhost-proxy is an HTTP reverse proxy for fronting virtual host
+web servers.
+
 Example use:
-(start-proxy 8080 '(("wiki.alu.org" "127.0.0.1" 8081)))
+(start-proxy 8080 '(("host1.domain.org" "127.0.0.1" 8081)
+                    ("host2.domain.org" "127.0.0.1" 8082)))
+
+Starts a reverse HTTP proxy on port 8080 that forwards HTTP requests
+to host1.domain.org to 127.0.0.1:8081, and requests to
+host2.domain.org to 127.0.0.1:8082. Any requests with a Host: header
+not found in the hosts table are forwarded to the first entry in the
+table (so unknown.domain.org gets forwarded to 127.0.0.1:8081).
+
+
+Author: Vladimir Sedach <vsedach@gmail.com>
+
+License: Affero GPLv3 (see LICENSE file)
 
 Todo:
 * better error handling
-* thread number limit and socket backlog
 * keepalive
 * XHR long-polling support
+* SSL
+* thread number limit and socket backlog
 * chunking

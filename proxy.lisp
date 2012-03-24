@@ -81,9 +81,9 @@
                     (server-timeout 2))
   "Start a reverse HTTP proxy on the specified port. hosts-table
 should consist of a list of hosts to be forwarded to particular IPs
-and ports, like so: ((domain1 127.0.0.1 8080) (domain2 127.0.0.1
-8081)) The first entry in the hosts-table is the default forwarding
-address if none of the entries match
+and ports, like so: ((\"domain1\" \"127.0.0.1\" 8080) (\"domain2\"
+\"127.0.0.1\" 8081)) The first entry in the hosts-table is the default
+forwarding address if none of the entries match
 
 Returns the main proxy server thread.
 
